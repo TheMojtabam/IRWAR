@@ -18,7 +18,7 @@ import (
 	"github.com/yourusername/slipstream-panel/internal/store"
 )
 
-//go:embed all:static
+//go:embed static/index.html
 var staticFiles embed.FS
 
 var (
