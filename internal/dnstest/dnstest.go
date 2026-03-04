@@ -1,161 +1,117 @@
-package dnstest
+package store
 
 import (
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
-	"net"
-	"strings"
+	"math/rand"
+	"os"
+	"sync"
 	"time"
 )
 
-type StepResult struct {
-	Step   string `json:"step"`
-	Query  string `json:"query"`
-	Status string `json:"status"`
-	MS     int64  `json:"ms"`
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail"`
+type Instance struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Resolver       string    `json:"resolver"`
+	Domain         string    `json:"domain"`
+	SocksPort      int       `json:"socks_port"`
+	RestartMinutes int       `json:"restart_minutes"`
+	AutoRestart    bool      `json:"auto_restart"`
+	ExtraArgs      string    `json:"extra_args"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
-type Result struct {
-	OK    bool         `json:"ok"`
-	Steps []StepResult `json:"steps"`
+type Store struct {
+	mu   sync.RWMutex
+	path string
+	data []Instance
 }
 
-func Run(resolver, domain string) Result {
-	host := resolver
-	port := "53"
-	if strings.Contains(resolver, ":") {
-		parts := strings.SplitN(resolver, ":", 2)
-		host, port = parts[0], parts[1]
-	}
-	addr := net.JoinHostPort(host, port)
-
-	steps := []struct {
-		name   string
-		qname  string
-		qtype  uint16
-		qtypes string
-	}{
-		{"A record", domain, 1, "A"},
-		{"NS record", domain, 2, "NS"},
-		{"TXT probe", "test." + domain, 16, "TXT"},
-	}
-
-	var results []StepResult
-	allOK := true
-
-	for _, s := range steps {
-		r := queryDNS(addr, s.qname, s.qtype, s.name)
-		results = append(results, r)
-		if !r.OK {
-			allOK = false
-		}
-	}
-
-	return Result{OK: allOK, Steps: results}
-}
-
-func queryDNS(addr, domain string, qtype uint16, stepName string) StepResult {
-	start := time.Now()
-
-	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+func New(path string) (*Store, error) {
+	s := &Store{path: path}
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return StepResult{
-			Step: stepName, Query: domain,
-			Status: "error", MS: 0, OK: false,
-			Detail: fmt.Sprintf("dial failed: %v", err),
+		if os.IsNotExist(err) {
+			return s, nil
 		}
+		return nil, err
 	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	pkt := buildQuery(domain, qtype)
-	if _, err := conn.Write(pkt); err != nil {
-		return StepResult{
-			Step: stepName, Query: domain,
-			Status: "error", OK: false,
-			Detail: fmt.Sprintf("send failed: %v", err),
-		}
-	}
-
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	ms := time.Since(start).Milliseconds()
-
-	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return StepResult{
-				Step: stepName, Query: domain,
-				Status: "timeout", MS: 5000, OK: false,
-				Detail: "no response after 5s",
-			}
-		}
-		return StepResult{
-			Step: stepName, Query: domain,
-			Status: "error", MS: ms, OK: false,
-			Detail: fmt.Sprintf("recv failed: %v", err),
-		}
-	}
-
-	if n < 12 {
-		return StepResult{
-			Step: stepName, Query: domain,
-			Status: "error", MS: ms, OK: false,
-			Detail: "response too short",
-		}
-	}
-
-	rcode   := int(buf[3] & 0x0F)
-	ancount := int(binary.BigEndian.Uint16(buf[6:8]))
-
-	status := "ok"
-	detail := fmt.Sprintf("responded in %dms, answers=%d", ms, ancount)
-	ok := true
-
-	switch rcode {
-	case 0:
-		status = "ok"
-	case 3:
-		status = "nxdomain"
-		detail = fmt.Sprintf("NXDOMAIN in %dms (server reachable)", ms)
-	default:
-		status = fmt.Sprintf("rcode=%d", rcode)
-		ok = false
-		detail = fmt.Sprintf("DNS error rcode=%d in %dms", rcode, ms)
-	}
-
-	return StepResult{
-		Step:   stepName,
-		Query:  domain,
-		Status: status,
-		MS:     ms,
-		OK:     ok,
-		Detail: detail,
-	}
+	return s, json.Unmarshal(b, &s.data)
 }
 
-func buildQuery(domain string, qtype uint16) []byte {
-	buf := make([]byte, 0, 64)
-
-	// Header
-	buf = append(buf, 0x13, 0x37) // ID
-	buf = append(buf, 0x01, 0x00) // flags: RD=1
-	buf = append(buf, 0x00, 0x01) // QDCOUNT=1
-	buf = append(buf, 0x00, 0x00) // ANCOUNT=0
-	buf = append(buf, 0x00, 0x00) // NSCOUNT=0
-	buf = append(buf, 0x00, 0x00) // ARCOUNT=0
-
-	// QNAME
-	for _, label := range strings.Split(strings.TrimSuffix(domain, "."), ".") {
-		buf = append(buf, byte(len(label)))
-		buf = append(buf, []byte(label)...)
+func (s *Store) save() error {
+	b, err := json.MarshalIndent(s.data, "", "  ")
+	if err != nil {
+		return err
 	}
-	buf = append(buf, 0x00) // root
+	return os.WriteFile(s.path, b, 0644)
+}
 
-	// QTYPE + QCLASS
-	buf = append(buf, byte(qtype>>8), byte(qtype))
-	buf = append(buf, 0x00, 0x01) // IN
+func (s *Store) List() []Instance {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Instance, len(s.data))
+	copy(out, s.data)
+	return out
+}
 
-	return buf
+func (s *Store) Get(id string) (Instance, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, v := range s.data {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	return Instance{}, false
+}
+
+func (s *Store) Create(in Instance) (Instance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.data {
+		if v.SocksPort == in.SocksPort {
+			return Instance{}, fmt.Errorf("port %d already used", in.SocksPort)
+		}
+	}
+	in.ID = randID()
+	in.CreatedAt = time.Now()
+	s.data = append(s.data, in)
+	return in, s.save()
+}
+
+func (s *Store) Update(id string, in Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, v := range s.data {
+		if v.ID == id {
+			in.ID = id
+			in.CreatedAt = v.CreatedAt
+			s.data[i] = in
+			return s.save()
+		}
+	}
+	return fmt.Errorf("not found")
+}
+
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.data[:0]
+	for _, v := range s.data {
+		if v.ID != id {
+			n = append(n, v)
+		}
+	}
+	s.data = n
+	return s.save()
+}
+
+func randID() string {
+	const c = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 8)
+	for i := range b {
+		b[i] = c[rand.Intn(len(c))]
+	}
+	return string(b)
 }
