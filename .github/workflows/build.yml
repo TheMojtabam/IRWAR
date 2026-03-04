@@ -2,9 +2,7 @@ name: Build
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -21,14 +19,11 @@ jobs:
           go-version: '1.21'
           cache: false
 
-      - name: Init go.sum
-        run: go mod tidy
+      - run: go mod tidy
 
-      - name: Build
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o slipstream-panel ./cmd/panel
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o slipstream-panel ./cmd/panel
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: slipstream-panel-linux-amd64
           path: slipstream-panel
