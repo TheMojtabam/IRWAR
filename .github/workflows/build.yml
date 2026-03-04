@@ -1,50 +1,35 @@
-name: Build & Release
+name: Build
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:   # دستی هم بشه اجرا کرد
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    name: Build binary
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+          cache: false
 
-      - name: Build Linux amd64 (Ubuntu سرور ایران)
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags="-s -w" \
-            -o slipstream-panel \
-            ./cmd/panel
+      - name: Init go.sum
+        run: go mod tidy
 
-      - name: Verify binary
-        run: |
-          ls -lh slipstream-panel
-          file slipstream-panel
+      - name: Build
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o slipstream-panel ./cmd/panel
 
-      # ── اگه tag زدی، release می‌سازه ──────────────────────
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: slipstream-panel
-          generate_release_notes: true
-
-      # ── اگه دستی اجرا کردی، آرتیفکت آپلود می‌کنه ─────────
       - name: Upload artifact
-        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: slipstream-panel-linux-amd64
           path: slipstream-panel
-          retention-days: 7
+          retention-days: 30
