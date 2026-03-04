@@ -42,19 +42,32 @@ func New(logsDir string) *Manager {
 }
 
 func findBin() string {
+	// اول env variable چک کن
+	if env := os.Getenv("SLIPSTREAM_BIN"); env != "" {
+		return env
+	}
 	candidates := []string{
+		"/usr/local/bin/slp",
 		"/usr/local/bin/slipstream",
+		"/usr/local/bin/slepstream",
+		"/usr/bin/slp",
 		"/usr/bin/slipstream",
+		os.ExpandEnv("$HOME/slp"),
 		os.ExpandEnv("$HOME/slipstream"),
+		os.ExpandEnv("$HOME/slepstream"),
+		"./slp",
 		"./slipstream",
+		"./slepstream",
 	}
 	for _, p := range candidates {
 		if info, err := os.Stat(p); err == nil && !info.IsDir() {
 			return p
 		}
 	}
-	if path, err := exec.LookPath("slipstream"); err == nil {
-		return path
+	for _, name := range []string{"slp", "slipstream", "slepstream"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
 	}
 	return ""
 }
