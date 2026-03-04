@@ -22,37 +22,29 @@ type Instance struct {
 }
 
 type Store struct {
-	mu       sync.RWMutex
-	dataFile string
-	data     []Instance
+	mu   sync.RWMutex
+	path string
+	data []Instance
 }
 
-func New(dataFile string) (*Store, error) {
-	s := &Store{dataFile: dataFile}
-	if err := s.load(); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("load store: %w", err)
-	}
-	return s, nil
-}
-
-func (s *Store) load() error {
-	b, err := os.ReadFile(s.dataFile)
+func New(path string) (*Store, error) {
+	s := &Store{path: path}
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			return s, nil
+		}
+		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return json.Unmarshal(b, &s.data)
+	return s, json.Unmarshal(b, &s.data)
 }
 
 func (s *Store) save() error {
-	s.mu.RLock()
 	b, err := json.MarshalIndent(s.data, "", "  ")
-	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.dataFile, b, 0644)
+	return os.WriteFile(s.path, b, 0644)
 }
 
 func (s *Store) List() []Instance {
@@ -66,62 +58,60 @@ func (s *Store) List() []Instance {
 func (s *Store) Get(id string) (Instance, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, inst := range s.data {
-		if inst.ID == id {
-			return inst, true
+	for _, v := range s.data {
+		if v.ID == id {
+			return v, true
 		}
 	}
 	return Instance{}, false
 }
 
-func (s *Store) Create(inst Instance) (Instance, error) {
-	s.mu.Lock()
-	// Check duplicate port
-	for _, existing := range s.data {
-		if existing.SocksPort == inst.SocksPort {
-			s.mu.Unlock()
-			return Instance{}, fmt.Errorf("port %d already in use", inst.SocksPort)
-		}
-	}
-	inst.ID = randID()
-	inst.CreatedAt = time.Now()
-	s.data = append(s.data, inst)
-	s.mu.Unlock()
-	return inst, s.save()
-}
-
-func (s *Store) Update(id string, updated Instance) error {
+func (s *Store) Create(in Instance) (Instance, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, inst := range s.data {
-		if inst.ID == id {
-			updated.ID = id
-			updated.CreatedAt = inst.CreatedAt
-			s.data[i] = updated
-			break
+	for _, v := range s.data {
+		if v.SocksPort == in.SocksPort {
+			return Instance{}, fmt.Errorf("port %d already used", in.SocksPort)
 		}
 	}
-	return s.save()
+	in.ID = randID()
+	in.CreatedAt = time.Now()
+	s.data = append(s.data, in)
+	return in, s.save()
+}
+
+func (s *Store) Update(id string, in Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, v := range s.data {
+		if v.ID == id {
+			in.ID = id
+			in.CreatedAt = v.CreatedAt
+			s.data[i] = in
+			return s.save()
+		}
+	}
+	return fmt.Errorf("not found")
 }
 
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	filtered := s.data[:0]
-	for _, inst := range s.data {
-		if inst.ID != id {
-			filtered = append(filtered, inst)
+	n := s.data[:0]
+	for _, v := range s.data {
+		if v.ID != id {
+			n = append(n, v)
 		}
 	}
-	s.data = filtered
+	s.data = n
 	return s.save()
 }
 
 func randID() string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	const c = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 8)
 	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
+		b[i] = c[rand.Intn(len(c))]
 	}
 	return string(b)
 }
